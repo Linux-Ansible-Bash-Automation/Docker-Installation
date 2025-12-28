@@ -27,6 +27,18 @@ The solution is designed for **enterprise environments**, including systems usin
 
 ---
 
+## RHEL 10 Support:
+Docker CE is not supported on Red Hat Enterprise Linux 10.
+> Use **Podman** with the following packages:
+> - podman  
+> - podman-docker  
+> - buildah  
+> - skopeo  
+> - containernetworking-plugins  
+> - fuse-overlayfs
+
+---
+
 ## 📂 Repository Structure
 
 ```
@@ -164,6 +176,7 @@ This message shows that your installation appears to be working correctly.
   * User has Docker-related permissions
 * Proxy environments may require additional configuration
 * Tested primarily on x86_64 systems
+* for RedHat 10 change the docker packages to podman.
 
 ---
 

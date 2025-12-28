@@ -23,7 +23,7 @@
       - docker-buildx-plugin
 
   pre_tasks:
-    - name: Ensure /tmp has correct sticky bit permissions
+    - name: Ensure /tmp has correct sticky bit permissions on remote node
       ansible.builtin.file: 
         path: /tmp
         mode: '1777'

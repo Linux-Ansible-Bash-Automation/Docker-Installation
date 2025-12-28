@@ -5,7 +5,7 @@ set -o pipefail
 
 # Initialize variables to avoid 'nounset' errors before they are assigned in functions
 ANSIBLE_REMOTE_USER=""
-BECOME_METHOD=""         # Used as extra-var 'play become method' (remote)
+BECOME_METHOD=""         # Used as extra-var 'play become method' (remote server)
 
 # --- Dynamically Generate User List ---
 options_user=()
