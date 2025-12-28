@@ -1,0 +1,202 @@
+---
+- name: Docker Installation on RedHat and Debian family
+  hosts: '*'
+  become: yes
+  become_method: "{{ play_become_method }}"
+  become_user: root
+  gather_facts: true
+
+  vars:
+    ansible_remote_tmp: /tmp/.ansible-${USER}
+    docker_packages_ubuntu:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose-plugin
+      - docker-buildx-plugin
+
+    docker_packages_rhel:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-compose-plugin
+      - docker-buildx-plugin
+
+  pre_tasks:
+    - name: Ensure /tmp has correct sticky bit permissions
+      ansible.builtin.file: 
+        path: /tmp
+        mode: '1777'
+        state: directory
+
+  tasks:
+# RedHat family installation ------------------------------------------------------------------
+    - name: Install Docker on RedHat family
+      block:
+        - name: Install required packages on yum based systems
+          ansible.builtin.yum:
+            name:
+              - yum-utils
+              - device-mapper-persistent-data
+              - lvm2
+            state: present
+          when: ansible_distribution_major_version | int < 8
+
+        - name: Install required packages on dnf based systems
+          ansible.builtin.dnf:
+            name:
+              - yum-utils
+              - device-mapper-persistent-data
+              - lvm2
+            state: present
+          when: ansible_distribution_major_version | int >= 8
+
+        - name: Check if docker-ce.repo exists
+          ansible.builtin.stat:
+            path: /etc/yum.repos.d/docker-ce.repo
+          register: docker_repo
+
+        - name: Compute timestamp for backup filename
+          ansible.builtin.set_fact:
+            index_backup_suffix: "{{ ansible_date_time.date }}-{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}{{ ansible_date_time.second }}"
+
+        - name: Backup existing docker-ce.repo
+          ansible.builtin.command: >
+            mv /etc/yum.repos.d/docker-ce.repo
+               /etc/yum.repos.d/docker-ce.repo.bak.{{ index_backup_suffix }}
+          when: docker_repo.exists | default(false)
+
+        - name: Add Docker repository
+          ansible.builtin.yum_repository:
+            name: docker-ce
+            description: Docker CE Stable
+            baseurl: "https://download.docker.com/linux/{{ docker_repo_os }}/{{ ansible_distribution_major_version }}/$basearch/stable"
+            gpgcheck: yes
+            gpgkey: https://download.docker.com/linux/{{ docker_repo_os }}/gpg
+            enabled: yes
+          vars: 
+            docker_repo_os: "{{ 'centos' if ansible_distribution_major_version | int == 7 else 'rhel' }}"
+
+        - name: Install Docker packages
+          ansible.builtin.yum:
+            name: "{{ docker_packages_rhel }}"
+            state: present
+      when: ansible_os_family == "RedHat"
+
+# Debian family installation ------------------------------------------------------------------
+    - name: Install Docker on Debian family
+      block:
+        - name: Install prerequisite packages
+          ansible.builtin.apt:
+            name:
+              - apt-transport-https
+              - ca-certificates
+              - curl
+              - gnupg-agent
+              - gnupg
+              - software-properties-common
+            state: present
+            update_cache: true
+
+        - name: Check if docker-ce.repo exists
+          ansible.builtin.stat:
+            path: /etc/apt/sources.list.d/docker.list
+          register: docker_stat
+
+        - name: Check if docker.gpg exists
+          ansible.builtin.stat:
+            path: /etc/apt/trusted.gpg.d/docker.gpg
+          register: docker_gpg_stat
+
+        - name: Compute timestamp for backup filename
+          ansible.builtin.set_fact:
+            index_backup_suffix: "{{ ansible_date_time.date }}-{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}{{ ansible_date_time.second }}"
+
+        - name: Backup existing docker.list
+          ansible.builtin.command: >
+            mv /etc/apt/sources.list.d/docker.list
+               /etc/apt/sources.list.d/docker.list.bak.{{ index_backup_suffix }}
+          when: docker_stat.stat.exists | default(false)
+
+        - name: Backup existing docker.gpg
+          ansible.builtin.command: >
+            mv /etc/apt/keyrings/docker.gpg
+               /etc/apt/keyrings/docker.gpg.bak.{{ index_backup_suffix }}
+          when: docker_gpg_stat.stat.exists | default(false)
+
+        - name: Add Docker GPG key
+          ansible.builtin.shell:
+            cmd: "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg"
+            creates: /etc/apt/keyrings/docker.gpg
+
+        - name: Set permissions on Docker GPG key
+          ansible.builtin.file:
+            path: /etc/apt/keyrings/docker.gpg
+            mode: '0644'
+      
+        - name: Add Docker repository
+          ansible.builtin.apt_repository:
+            repo: "deb [arch={{ 'amd64' if ansible_architecture == 'x86_64' else ansible_architecture }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+            state: present
+            filename: docker
+
+        - name: Update apt cache
+          ansible.builtin.apt:
+            update_cache: true
+          ignore_errors: true
+
+        - name: Install Docker packages
+          ansible.builtin.apt:
+            name: "{{ docker_packages_ubuntu }}"
+            state: present
+      when: ansible_os_family == "Debian"
+
+# Post installation & Verification steps ------------------------------------------------------------------
+    - name: Start Docker and Verify Installation
+      block:
+        - name: Ensure Docker service is started and enabled
+          ansible.builtin.systemd:
+            name: docker
+            state: started
+            enabled: true
+
+        - name: Verify Docker installation (first attempt)by checking version
+          ansible.builtin.command: docker run hello-world
+          register: docker_info
+          changed_when: false
+          failed_when: docker_info.rc != 0
+
+      rescue:
+        - name: Reload systemd daemon
+          ansible.builtin.systemd:
+            daemon_reload: yes
+
+        - name: Restart containerd service
+          ansible.builtin.systemd:
+            name: containerd
+            state: restarted
+            enabled: true
+
+        - name: Retry starting Docker service
+          ansible.builtin.systemd:
+            name: docker
+            state: started
+            enabled: true 
+        
+        - name: Verify Docker installation (second attempt)
+          ansible.builtin.command: docker run hello-world
+          register: docker_info_retry
+          changed_when: false
+          failed_when: docker_info_retry.rc != 0
+
+      always:
+        - name: Display Docker info (first attempt)
+          ansible.builtin.debug:
+            var: docker_info.stdout_lines 
+          when: docker_info is defined
+
+        - name: Display Docker verification (after restart)
+          ansible.builtin.debug:
+            var: docker_info_retry.stdout_lines 
+          when: docker_info_retry is defined
+      when: ansible_os_family == "RedHat" or ansible_os_family == "Debian"
